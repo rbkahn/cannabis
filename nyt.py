@@ -17,23 +17,34 @@ def signal_handler(sig, frame):
     df.to_csv(csv_name)
     print('You pressed Ctrl+C!')
     sys.exit(0)
-
-
-
 signal.signal(signal.SIGINT, signal_handler)
+
+def get_csv_name(a_date):
+    return 'articles/articles-' + str(a_date.year) + '.csv'
+
+def get_identifier_set(df):
+    return set(df['title'] + (pd.to_datetime(df['date']).dt.date).apply(str))
+def get_identifier(article):
+    return article.headline['main'] + str(pd.to_datetime(article.pub_date)).split(' ')[0]
+
 articles_skipped = 0
-first_date = date.today()
+with open('last_date.txt', 'r') as f: 
+    date_l = list(map(int, f.read().split('-')))
+    first_date = date(date_l[0], date_l[1], date_l[2])
+#first_date = date.today()
 our_date = first_date
 already_errored = False
 
-csv_name = 'articles-' + str(our_date.year) + '.csv'
+csv_name = get_csv_name(our_date)
 if os.path.exists(csv_name):
     df = pd.read_csv(csv_name)
     id_set = set(df['id'])
+    check_set = get_identifier_set(df)
     date_set = set(df['date'].apply(lambda x : pd.to_datetime(x).date()))
 else:
     df = pd.DataFrame()
     id_set = set()
+    check_set = set()
     date_set = set()
 article_count = 0
 
@@ -46,10 +57,11 @@ while(True):
                 sleep(6)
                 articles = api.search(term, begin_date=date_str, end_date=date_str)
                 for article in articles:
-                    if article._id in id_set:
+                    if article._id in id_set or get_identifier(article) in check_set:
                         articles_skipped += 1
                         continue
                     id_set.add(article._id)
+                    check_set.add(article.headline['main'] + article.pub_date)
                     article_count += 1
                     print(article_count, article.headline['main'], article.pub_date)
                     session = requests
@@ -73,6 +85,10 @@ while(True):
                         df.to_csv(csv_name)
             except TooManyRequestsException:
                 print("Too many requests")
+                with open('last_date.txt', 'w') as f: 
+                    f.write(str(our_date)) 
+                raise
+            except SystemExit:
                 raise
             except ConnectionError:
                 print("Conection error")
@@ -94,14 +110,16 @@ while(True):
         print("Done with ", our_date.year)
         df.to_csv(csv_name)
         our_date -= timedelta(days=1)
-        csv_name = 'articles-' + str(our_date.year) + '.csv'
+        csv_name = get_csv_name(our_date)
         if os.path.exists(csv_name):
             df = pd.read_csv(csv_name)
             id_set = set(df['id'])
+            check_set = get_identifier_set(df)
             date_set = set(df['date'].apply(lambda x : pd.to_datetime(x).date()))
         else:
             df = pd.DataFrame()
             id_set = set()
+            check_set = set()
             date_set = set()
         article_count = 0
     already_errored = False
