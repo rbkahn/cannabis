@@ -1,9 +1,6 @@
 import pandas as pd
-import pprint
 import requests
-import os
-import sys
-import signal
+import os, sys, signal
 from time import sleep
 from datetime import date, timedelta
 from yanytapi.search import TooManyRequestsException
@@ -12,81 +9,135 @@ from yanytapi import SearchAPI
 api = SearchAPI("TjGk9kxFO9ScvfSF8AfeqkXjjujBnz6e")
 
 def signal_handler(sig, frame):
-    print(str(date))
+    print(str(our_date))
     print(articles_skipped, " articles skipped")
-    df.to_csv(csv_name)
+    save_csv(df, our_date.year)
     print('You pressed Ctrl+C!')
     sys.exit(0)
 signal.signal(signal.SIGINT, signal_handler)
 
-def get_csv_name(a_date):
-    return 'articles/articles-' + str(a_date.year) + '.csv'
+def is_sneaky_duplicate(df, article):
+    return not df.loc[(df['title'] == process(article.headline['main'])) & (df['date'] == article.pub_date[:10])].empty and \
+        first_paragraph == df.loc[(df['title'] == process(article.headline['main'])) & \
+                                    ((df['date'] ==  article.pub_date[:10]) & \
+                                   (df['p#'] == 1.0)), 'text'].values[0]
+def is_byline(paragraph):
+    return (len(paragraph.split()) < 11 and paragraph[:12] == 'Compiled by ') or \
+            (len(paragraph.split()) < 10 and paragraph[:3] == 'By ')
 
-def get_identifier_set(df):
-    return set(df['title'] + (pd.to_datetime(df['date']).dt.date).apply(str))
-def get_identifier(article):
-    return article.headline['main'] + str(pd.to_datetime(article.pub_date)).split(' ')[0]
+
+def process(text):
+    text = text.replace("\n", "")
+    text = ' '.join(text.split())
+    return text
+
+def get_df(years=None):
+    if not years:
+        return pd.concat([pd.read_csv('articles/' + file) for file in os.listdir('articles') if 'articles' in file], ignore_index=True, sort=False)
+    else:
+        return pd.concat([pd.read_csv(get_csv_name(year)) for year in years], ignore_index=True, sort=False)
+
+def get_csv_name(year):
+    return 'articles/articles-' + str(year) + '.csv'
+
+
+def save_csv(df, year):
+    df[pd.to_datetime(df['date']).dt.year == year].to_csv(get_csv_name(year))
+    with open('last_date.txt', 'w') as f: 
+        f.write(str(our_date)) 
+
+def clean_data(df):
+    df['date'] = df['date'].apply(lambda x : x[:10])
+    df.drop([col for col in df.columns if 'Unnamed' in col], axis=1, inplace=True)
+    print("Original shape: ", df.shape)
+    df.drop(df.loc[df['text'] == "We’re sorry, we seem to have lost this page, but we don’t want to lose you."].index, inplace=True)
+    df.drop(df.loc[df['text'] == "We’re sorry, we seem to have lost this page, but we don’t want to lose you. Report the broken link here."].index, inplace=True)
+    df.drop(df.loc[df['text'] == "Go to Home Page »"].index, inplace=True)
+    print("Dropped failed pages: ", df.shape)
+    df.drop(df.loc[(df['text'].str.startswith('Compiled by ')) & (df['p#'] == 1.0)].index, inplace=True)
+    df.drop(df.loc[(df['text'].str.startswith('By ')) & (df['p#'] == 1.0)].index, inplace=True)
+    print("Dropped byline paragraphs: ", df.shape)
+    df['text'] = df['text'].apply(lambda x : x.replace("\n", ""))
+    df['text'] = df['text'].apply(lambda x : ' '.join(x.split()))
+    df.drop_duplicates(subset=['date', 'title', 'text', 'p#'], inplace=True)
+    print("Dropped duplicates: ", df.shape)
+    return df
 
 articles_skipped = 0
 with open('last_date.txt', 'r') as f: 
     date_l = list(map(int, f.read().split('-')))
-    first_date = date(date_l[0], date_l[1], date_l[2])
-#first_date = date.today()
-our_date = first_date
+    our_date = date(date_l[0], date_l[1], date_l[2])
+print(our_date)
 already_errored = False
 
-csv_name = get_csv_name(our_date)
-if os.path.exists(csv_name):
-    df = pd.read_csv(csv_name)
-    id_set = set(df['id'])
-    check_set = get_identifier_set(df)
-    date_set = set(df['date'].apply(lambda x : pd.to_datetime(x).date()))
-else:
-    df = pd.DataFrame()
-    id_set = set()
-    check_set = set()
-    date_set = set()
+df = get_df()
+df = clean_data(df)
+id_set = set(df['id'])
+date_set = set(df['date'])
+
 article_count = 0
 
 while(True):
-    if our_date not in date_set:
+    if str(our_date) not in date_set:
         for term in ["cannabis", "marijuana"]:
             try: 
                 date_str = str(our_date).replace('-', '')
-                print(str(our_date))
                 sleep(6)
+                print(term, date_str)
                 articles = api.search(term, begin_date=date_str, end_date=date_str)
+                
                 for article in articles:
-                    if article._id in id_set or get_identifier(article) in check_set:
+                    if article._id in id_set:
                         articles_skipped += 1
+                        print('Already read "%s"' % article.headline['main'])
                         continue
-                    id_set.add(article._id)
-                    check_set.add(article.headline['main'] + article.pub_date)
-                    article_count += 1
-                    print(article_count, article.headline['main'], article.pub_date)
                     session = requests
                     url = article.web_url
                     req = session.get(url)
                     soup = BeautifulSoup(req.content, 'html.parser')
                     paragraphs = soup.find_all('p')
-                    count = 0
+                    # Rule out lost pages
+                    if "We’re sorry, we seem to have lost this page, but we don’t want to lose you." in paragraphs[0].get_text():
+                        print('"'. article.headline['main'], '" is not really retrievable from ', url)
+                        id_set.add(article._id)
+                        continue
+                    # Get rid of bylines
+                    first_paragraph = process(paragraphs[0].get_text())
+                    if is_byline(first_paragraph):
+                        paragraphs = paragraphs[1:]
+                        first_paragraph = process(paragraphs[0].get_text())
+                    while len(first_paragraph.split()) < 6:
+                        paragraphs = paragraphs[1:]
+                        first_paragraph = process(paragraphs[0].get_text())
+                    # Skip snuck in duplicates
+                    if is_sneaky_duplicate(df, article):
+                        print('Actually, already read "%s"' % article.headline['main'])
+                        articles_skipped += 1
+                        id_set.add(article._id)
+                        continue
+                    paragraph_count = 0
                     for p in paragraphs:
                         text = p.get_text()
-                        if len(text.split()) < 5:
+                        if len(text.split()) < 6:
                             continue
-                        count += 1
+                        paragraph_count += 1
+                        if  process(text) == "Go to Home Page »":
+                            continue
                         df = df.append({'id': article._id, 
-                                'title': article.headline['main'], 
-                                'date': article.pub_date,
+                                'title': process(article.headline['main']), 
+                                'date': article.pub_date[:10],
                                 'url': article.web_url,
-                                'p#' : count,
-                                'text': text}, ignore_index=True)
-                    if article_count % 50 == 0:
-                        df.to_csv(csv_name)
+                                'p#' : paragraph_count,
+                                'text': process(text)}, ignore_index=True)
+                    if paragraph_count:
+                        id_set.add(article._id)
+                        article_count += 1
+                        print(article_count, article.headline['main'], article.pub_date)
+                        if article_count % 50 == 0:
+                            save_csv(df, our_date.year)
             except TooManyRequestsException:
                 print("Too many requests")
-                with open('last_date.txt', 'w') as f: 
-                    f.write(str(our_date)) 
+                save_csv(df, our_date.year)
                 raise
             except SystemExit:
                 raise
@@ -94,88 +145,23 @@ while(True):
                 print("Conection error")
                 sleep(6)
                 continue
+            except StopIteration:
+                continue
             except:
+                print("Unexpected error:", sys.exc_info())
                 if already_errored:
                     print(our_date)
                     print(articles_skipped, " articles skipped")
-                    df.to_csv(csv_name)
-                    import sys; print("Unexpected error:", sys.exc_info()[0])
+                    save_csv(df, our_date.year)
                     raise    
                 else:
                     already_errored = True
                     continue
     date_set.add(our_date)
-    our_date -= timedelta(days=1)
     if (our_date.month == 1 and our_date.day == 1):
+        article_count = 1
+        save_csv(df, our_date.year)
         print("Done with ", our_date.year)
-        df.to_csv(csv_name)
-        our_date -= timedelta(days=1)
-        csv_name = get_csv_name(our_date)
-        if os.path.exists(csv_name):
-            df = pd.read_csv(csv_name)
-            id_set = set(df['id'])
-            check_set = get_identifier_set(df)
-            date_set = set(df['date'].apply(lambda x : pd.to_datetime(x).date()))
-        else:
-            df = pd.DataFrame()
-            id_set = set()
-            check_set = set()
-            date_set = set()
-        article_count = 0
-    already_errored = False
+    our_date -= timedelta(days=1)
 
-'''
-for year in range(2019, 1985, -1):
-    if year == 2019:
-        sdate = datetime(2019, 11, 1)
-    else:
-        sdate = datetime(2019, 12, 31)
-    csv_name = 'articles-' + str(year) + '.csv'
-    if os.path.exists(csv_name):
-        df = pd.read_csv(csv_name)
-        id_set = set(df['id'])
-    else:
-        df = pd.DataFrame()
-        id_set = set()
-    for begin, end in [('0201', '0228'), ('0301', '0331'), ('0401', '0430'), ('0501', '0531'), ('0601', '0630'), ('0701', '0731'), ('0801', '0831'), ('0901', '0930'), ('1001', '1031'), ('1101','1130'), ('1201', '1231'), ('0101', '0131'), ]:
-        for term in ["cannabis", "marijuana"]:
-            try: 
-                begin_date = str(year) + begin
-                end_date = str(year) + end
-                articles = api.search(term, begin_date=begin_date, end_date=end_date)
-                article_count = 0
-                for article in articles:
-                    if article._id in id_set:
-                        articles_skipped += 1
-                        continue
-                    id_set.add(article._id)
-                    article_count += 1
-                    print(article_count, article.headline['main'], article.pub_date)
-                    session = requests
-                    url = article.web_url
-                    req = session.get(url)
-                    soup = BeautifulSoup(req.content, 'html.parser')
-                    paragraphs = soup.find_all('p')
-                    count = 0
-                    for p in paragraphs:
-                        text = p.get_text()
-                        if len(text.split()) < 5:
-                            continue
-                        count += 1
-                        df = df.append({'id': article._id, 
-                                'title': article.headline['main'], 
-                                'date': article.pub_date,
-                                'url': article.web_url,
-                                'p#' : count,
-                                'text': text}, ignore_index=True)
-                    
-                    if article_count % 50 == 0:
-                        df.to_csv(csv_name)
-            except:
-                print(year, begin, end)
-                print(articles_skipped, " articles skipped")
-                df.to_csv(csv_name)
-                import sys; print("Unexpected error:", sys.exc_info()[0])
-                raise
-'''
-    
+    already_errored = False
