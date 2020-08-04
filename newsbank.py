@@ -5,7 +5,7 @@
 import pandas as pd
 from datetime import date, timedelta
 from bs4 import BeautifulSoup
-from scrape_utils import process, is_sneaky_duplicate, is_byline
+from scrape_utils import process
 import xml.etree.ElementTree as ET
 import os, sys, io
 from bs4 import BeautifulSoup
@@ -15,18 +15,14 @@ datadir = '../../data'
 cleandatadir = './cleaned_data/s'
 
 def get_csv_name(year):
-    return 'articles/articles-' + str(year) + '.csv'
+    return cleandatadir + str(year) + '.csv'
 
 def save_csv(df, date):
     df[df['date'].str[:4] == str(date.year)].to_csv(get_csv_name(date.year))
 
-def is_sneaky_duplicate(df, headline, date, first_paragraph):
-    return not df.loc[(df['title'] == process(headline)) & (df['date'] == date[:10])].empty and \
-        first_paragraph == df.loc[(df['title'] == process(headline)) & \
-                                    ((df['date'] ==  date) & \
-                                   (df['p#'] == 1.0)), 'text'].values[0]
-
 def clean_newsbank():
+'''Walks through a corpus of newsbank articles in xml format, cleans the data, 
+   and saves it to csv'''
     id_set = set()
     article_count = 0
     for year in range(1983,2020):
@@ -79,6 +75,7 @@ def clean_newsbank():
 
 
 def get_summary():
+    '''Prints the number of articles and tokens per year of the newsbank corpus '''
     l = list()
     for year in range(1980, 2020):
         articles = 0
