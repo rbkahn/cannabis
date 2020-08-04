@@ -1,3 +1,5 @@
+'''Code for scraping the NYT corpus'''
+
 import pandas as pd
 import requests
 import os, sys, signal

@@ -1,97 +1,96 @@
+# -*- coding: utf-8 -*-
+
+'''Code for processing newsbank data'''
+
 import pandas as pd
 from datetime import date, timedelta
 from bs4 import BeautifulSoup
 from scrape_utils import process, is_sneaky_duplicate, is_byline
 import xml.etree.ElementTree as ET
+import os, sys, io
+from bs4 import BeautifulSoup
 
 
-df = pd.DataFrame()
-id_set = set(df['id'])
+datadir = '../../data'
+cleandatadir = './cleaned_data/s'
 
 def get_csv_name(year):
-    return 'articles/newsbank/articles-' + str(year) + '.csv'
+    return 'articles/articles-' + str(year) + '.csv'
 
 def save_csv(df, date):
     df[df['date'].str[:4] == str(date.year)].to_csv(get_csv_name(date.year))
 
+def is_sneaky_duplicate(df, headline, date, first_paragraph):
+    return not df.loc[(df['title'] == process(headline)) & (df['date'] == date[:10])].empty and \
+        first_paragraph == df.loc[(df['title'] == process(headline)) & \
+                                    ((df['date'] ==  date) & \
+                                   (df['p#'] == 1.0)), 'text'].values[0]
 
-article_count = 0
+def clean_newsbank():
+    id_set = set()
+    article_count = 0
+    for year in range(1983,2020):
+        our_df = pd.DataFrame(columns=['title', 'date', 'p#', 'text'])
+        for article in os.listdir(cleandatadir + str(year)):
+            article_path = cleandatadir + '%s/%s' % (year, article)
+            with open(article_path, mode='r', encoding='utf-8') as fp:
+                try:
+                    soup = BeautifulSoup(fp)
+                    id = soup.nbx.unq.string
+                    if soup.nbx.hed:
+                        headline = soup.nbx.hed.string
+                    else:
+                        headline = "no headline"
+                    if id in id_set:
+                        articles_skipped += 1
+                        print('Already read "%s"' % headline)
+                        continue
+        
+                    # confirm that there is text
+                    lead = process(soup.nbx.led.string)
+                    if soup.nbx.mnt:
+                        main_text = process(soup.nbx.mnt.string)
+                    else:
+                        main_text = ''
+                    if len(lead.split()) < 6 and len(main_text.split()) < 6:
+                        print("No text for ", article_path)
+                        continue
+                    date = soup.nbx.ymd.string
+                    paragraph_count = 0 
+                    for text in [lead, main_text]:
+                        if len(text.split()) >= 6:
+                            our_df = our_df.append({'id': id, 
+                                'title': process(headline), 
+                                'date': date,
+                                'p#' : paragraph_count,
+                                'text': process(text)}, ignore_index=True)
+                            paragraph_count += 1
+                    if paragraph_count:
+                        id_set.add(id)
+                        article_count += 1
+                        try:
+                            print(article_count, headline, date)
+                        except:
+                            print(article_count, "trouble printing headline", date)
+                except:
+                    print("Problem with %s" % article_path)
+                    sys.exit()
+        our_df.to_csv(get_csv_name(year))
 
-for (article in articles)
-    tree = ET.parse(article)
-    root = tree.getroot()
-    id = root.find('UNQ').text
-    headline = root.find('HED').text
-    if id in id_set:
-        articles_skipped += 1
-        print('Already read "%s"' % headline)
-        continue
-    
-    # Check for articles that are Sorry we can't find this article
-    # Get rid of bylines
 
-    # confirm that there is text
-    lead = process(root.find('LED').text)
-    first_paragraph = lead
-    maintext = process(root.find('MNT').text)
-    if is_byline(first_paragraph)
-        first_paragraph = maintext
-    if len(first_paragraph.split()) < 6:
-        print("No text for ", url)
-        continue
-    # Skip snuck in duplicates
-    if is_sneaky_duplicate(df, article, first_paragraph):
-        print('Actually, already read "%s"' % headline)
-        articles_skipped += 1
-        id_set.add(id)
-        continue
+def get_summary():
+    l = list()
+    for year in range(1980, 2020):
+        articles = 0
+        tokens = 0
+        words = 0
+        article_dir = cleandatadir + str(year)
+        for filename in os.listdir(article_dir):
+            articles += 1
+            with open(article_dir + '/' + filename, encoding='utf-8') as f:
+                for line in f:
+                    words += len(line.split())
+        print(year, articles, words)
 
-
-    date = root.find('YMD').text
-    #process lead
-    paragraph_count = 0
-    for text in [lead, main_text]
-        if len(text.split()) >= 6:
-            df = df.append({'id': id, 
-                    'title': process(headline), 
-                    'date': date
-                    'p#' : paragraph_count,
-                    'text': process(text)}, ignore_index=True)
-            paragraph_count += 1
-    if paragraph_count:
-        id_set.add(id)
-        article_count += 1
-        print(article_count, headline, date)
-    if article_count % 50 == 0:
-        save_csv(df, our_date)
-
-
-
-
-'''
-import scrapy
-
-class BrickSetSpider(scrapy.Spider):
-   name = "brickset_spider"
-
-    #start_urls = ['http://brickset.com/sets/year-2016']
-    start_urls = ['https://infoweb-newsbank-com.stanford.idm.oclc.org/apps/news/easy-search?p=AWNB']
-    start_urls = ['https://login.stanford.idm.oclc.org/']
-
-    def parse(self, response):
-        return scrapy.FormRequest.from_response(
-            response,
-            formdata={'username': 'rbkahn', 'password': 'applesauce in bourbon'},
-            callback=self.after_login
-        )
-    
-    def after_login(self, response):
-        self.logger.error(36, response.body)
-        if "Error while logging in" in response.body:
-            self.logger.error("Login failed!")
-        else:
-            self.logger.error("Login succeeded!")
-            #item = SampleItem()
-            #item["quote"] = response.css(".text").extract()
-            #item["author"] = response.css(".author").extract()
-            return item'''
+def get_df(years):
+    return pd.concat([pd.read_csv(cleandatadir + str(year)) for year in years], ignore_index=True, sort=False, engine='python')
