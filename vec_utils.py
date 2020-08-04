@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+'''Helper functions for generating and analyzing word vectors'''
+
 import pandas as pd
 import numpy as np
 from collections import defaultdict, Counter

@@ -1,3 +1,5 @@
+'''helper functions for scraping NYT articles'''
+
 import pandas as pd
 import os, sys
 from datetime import date
